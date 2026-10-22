@@ -1,0 +1,34 @@
+id = "schedule-tasks"
+name = "Schedule Tasks"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Cron-scheduled agent prompts and tab commands, shown as a sidebar module"
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["node", "src/actions.js", "startup"]
+
+[[actions]]
+id = "run-now"
+title = "Schedules: run task now"
+command = ["node", "src/actions.js", "run-now"]
+
+[[actions]]
+id = "toggle"
+title = "Schedules: pause/resume task"
+command = ["node", "src/actions.js", "toggle"]
+
+[[actions]]
+id = "restart"
+title = "Schedules: restart scheduler"
+command = ["node", "src/actions.js", "restart"]
+
+[[actions]]
+id = "stop"
+title = "Schedules: stop scheduler"
+command = ["node", "src/actions.js", "stop"]
+
+[[actions]]
+id = "open-config"
+title = "Schedules: open tasks.json"
+command = ["node", "src/actions.js", "open-config"]

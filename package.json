@@ -1,0 +1,16 @@
+{
+  "name": "herdr-schedule-tasks",
+  "version": "0.1.0",
+  "description": "Herdr plugin: cron-scheduled agent prompts and commands with a sidebar module",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "schedule": "bin/schedule"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
