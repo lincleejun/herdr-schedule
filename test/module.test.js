@@ -33,6 +33,7 @@ test("module envelope matches the module.set contract", () => {
       label: "Standup",
       detail: "next 09:00",
       status: "neutral",
+      click_action: "open",
       actions: [
         { action_id: "run-now", label: "▶" },
         { action_id: "toggle", label: "⏸" },

@@ -4,6 +4,8 @@ import { execFile } from "node:child_process";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 
+import { AGENT_FLAGS } from "./tasks.js";
+
 export class HerdrError extends Error {
   constructor(code, message) {
     super(code ? `${code}: ${message}` : message);
@@ -134,11 +136,28 @@ export function expandHome(path) {
   return path;
 }
 
+/** Single-quotes `text` for a POSIX shell. */
+export function shellQuote(text) {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The shell command line an `agent` task types into its new tab. */
+export function agentCommand(task) {
+  const flags = AGENT_FLAGS[task.agent];
+  const parts = [task.agent];
+  if (task.model !== undefined) parts.push(flags.model, shellQuote(task.model));
+  if (task.thinking !== undefined) parts.push(flags.thinking, shellQuote(task.thinking));
+  // A prompt file is read when the command runs, so edits apply to the next run.
+  parts.push(task.prompt_file !== undefined ? `"$(cat ${shellQuote(expandHome(task.prompt_file))})"` : shellQuote(task.prompt));
+  return parts.join(" ");
+}
+
 /**
  * Executes one validated task. `herdr` is the CLI runner (injectable for
- * tests). Resolves with a short description; rejects with the failure.
+ * tests); `focus` brings the run's tab or agent pane to the front.
+ * Resolves with { summary, tab_id?, pane_id? }; rejects with the failure.
  */
-export async function executeTask(task, herdr = runHerdr) {
+export async function executeTask(task, herdr = runHerdr, { focus = false } = {}) {
   if (task.kind === "prompt") {
     let paneId = task.pane_id;
     if (paneId === undefined) {
@@ -148,7 +167,8 @@ export async function executeTask(task, herdr = runHerdr) {
     }
     // `agent prompt` types the text and submits it with Enter.
     await herdr(["agent", "prompt", paneId, task.text]);
-    return `prompted ${paneId}`;
+    if (focus) await herdr(["agent", "focus", paneId]);
+    return { summary: `prompted ${paneId}`, pane_id: paneId };
   }
   const { workspaces } = await herdr(["workspace", "list"]);
   const workspace = resolveWorkspace(workspaces ?? [], task.workspace);
@@ -158,7 +178,39 @@ export async function executeTask(task, herdr = runHerdr) {
   const created = await herdr(args);
   const paneId = created?.root_pane?.pane_id;
   if (!paneId) throw new HerdrError("invalid_response", "tab create returned no root pane");
+  const tabId = created?.tab?.tab_id;
   // `pane run` sends the command text followed by Enter.
-  await herdr(["pane", "run", paneId, task.command]);
-  return `started in ${paneId}`;
+  await herdr(["pane", "run", paneId, task.kind === "agent" ? agentCommand(task) : task.command]);
+  // Focusing a tab also switches to its workspace.
+  if (focus && tabId) await herdr(["tab", "focus", tabId]);
+  return { summary: `started in ${paneId}`, tab_id: tabId, pane_id: paneId };
+}
+
+/**
+ * Brings a task to the front: the tab (or agent pane) of its latest run when
+ * that still exists, else its workspace. `last` holds last_tab_id / last_pane_id.
+ */
+export async function focusTask(task, last, herdr = runHerdr) {
+  if (task.kind === "prompt") {
+    const paneId = last.last_pane_id ?? task.pane_id;
+    if (paneId !== undefined) {
+      try {
+        await herdr(["agent", "focus", paneId]);
+        return `focused ${paneId}`;
+      } catch (error) {
+        if (task.workspace === undefined) throw error;
+      }
+    }
+  } else if (last.last_tab_id !== undefined) {
+    try {
+      await herdr(["tab", "focus", last.last_tab_id]);
+      return `focused ${last.last_tab_id}`;
+    } catch {
+      // The tab was closed; fall back to the workspace.
+    }
+  }
+  const { workspaces } = await herdr(["workspace", "list"]);
+  const workspace = resolveWorkspace(workspaces ?? [], task.workspace);
+  await herdr(["workspace", "focus", workspace.workspace_id]);
+  return `focused ${workspace.workspace_id}`;
 }

@@ -1,13 +1,18 @@
 # schedule-tasks
 
 A Herdr plugin that runs tasks on cron schedules and shows them as a
-**schedules** module at the top of the sidebar. Each row has `▶` (run now)
-and `⏸`/`⏵` (pause/resume) controls.
+**schedules** module at the top of the sidebar. Each row has `▶` (run now and
+switch to the run's tab) and `⏸`/`⏵` (pause/resume) controls. Clicking the
+row itself switches to the tab of the task's latest run, or to its workspace
+when that tab is gone; this needs a Herdr build whose modules support
+`click_action`.
 
-Two kinds of task:
+Three kinds of task:
 
 - **prompt**: type a prompt into an existing agent pane and submit it.
 - **command**: open a new tab in a workspace and run a shell command in it.
+- **agent**: open a new tab in a workspace and start an agent CLI (`murong` or
+  `claude`) there with a configured model, thinking level, and prompt.
 
 Needs Node.js 22+ on the `PATH` Herdr sees, macOS or Linux, and a Herdr build
 with the sidebar module API (`module.set`). On older Herdr builds tasks still
@@ -56,6 +61,18 @@ by hand or with `bin/schedule`; the daemon reloads it as soon as it changes.
       "tab_name": "nightly",
       "command": "npm test 2>&1 | tee /tmp/nightly.log",
       "enabled": false
+    },
+    {
+      "id": "daily-brief",
+      "cron": "0 10 * * 1-5",
+      "kind": "agent",
+      "agent": "murong",
+      "model": "anthropic/claude-opus-5-5",
+      "thinking": "medium",
+      "prompt_file": "~/briefs/daily.md",
+      "workspace": "api",
+      "cwd": "~/src/api",
+      "tab_name": "daily-brief"
     }
   ]
 }
@@ -70,10 +87,14 @@ by hand or with `bin/schedule`; the daemon reloads it as soon as it changes.
 | `text` | prompt | Required. The prompt to submit. |
 | `pane_id` | prompt | Target agent pane, e.g. `w1:p2`. |
 | `workspace` + `agent` | prompt | Or pick the agent at run time: the workspace label (or id), and the agent's name (set with `herdr agent rename`) or kind (`claude`, `codex`, …). It must match exactly one agent in that workspace. |
-| `workspace` | command | Required. Workspace label (or id) that gets the new tab. |
-| `cwd` | command | Absolute path or `~/…` for the new tab. |
-| `tab_name` | command | Label for the new tab. |
+| `workspace` | command, agent | Required. Workspace label (or id) that gets the new tab. |
+| `cwd` | command, agent | Absolute path or `~/…` for the new tab. |
+| `tab_name` | command, agent | Label for the new tab. |
 | `command` | command | Required. Shell command typed into the new tab and run with Enter. |
+| `agent` | agent | Required. Agent CLI to start: `murong` or `claude`. |
+| `model` | agent | Model passed with `--model`. Omit for the CLI's default. |
+| `thinking` | agent | Thinking level: `murong --thinking`, `claude --effort`. Omit for the CLI's default. |
+| `prompt` / `prompt_file` | agent | Exactly one. The first message, inline or as an absolute / `~/…` file path. A file is read when the run starts, so edits apply to the next run. |
 
 ## CLI
 
@@ -85,6 +106,10 @@ bin/schedule add standup --cron "0 9 * * 1-5" --workspace api --agent claude \
   --prompt "Summarize yesterday's commits"
 bin/schedule add nightly --cron "30 2 * * *" --workspace api --cwd ~/src/api \
   --tab-name nightly --command "npm test"
+bin/schedule add daily-brief --cron "0 10 * * 1-5" --workspace api --cwd ~/src/api \
+  --launch murong --model anthropic/claude-opus-5-5 --thinking medium \
+  --prompt-file ~/briefs/daily.md
+bin/schedule set daily-brief --thinking high   # change fields; "" removes one
 bin/schedule list            # next run and last result
 bin/schedule disable nightly
 bin/schedule enable nightly
@@ -93,9 +118,9 @@ bin/schedule remove nightly
 bin/schedule path            # print the tasks.json path
 ```
 
-Plugin actions: `run-now` and `toggle` (from the sidebar controls), `restart`,
-`stop`, and `open-config` (opens tasks.json and shows its path in a
-notification).
+Plugin actions: `run-now`, `toggle`, and `open` (from the sidebar controls and
+row clicks), `restart`, `stop`, and `open-config` (opens tasks.json and shows
+its path in a notification).
 
 ## How runs work
 
@@ -108,10 +133,11 @@ notification).
   skipped.
 - Prompt runs use `herdr agent prompt <pane> <text>`. A missing or ambiguous
   target, or an agent that is `blocked`, marks the run failed.
-- Command runs use `herdr tab create --workspace <id> --no-focus [--cwd]
-  [--label]` then `herdr pane run <root pane> <command>`. The run counts as
-  successful once the command has been typed in; the command's exit status is
-  not tracked.
+- Command and agent runs use `herdr tab create --workspace <id> --no-focus
+  [--cwd] [--label]` then `herdr pane run <root pane> <command>`. The run
+  counts as successful once the command has been typed in; the command's exit
+  status is not tracked. Scheduled runs never take focus; `▶` in the sidebar
+  switches to the new tab.
 - Daylight saving: local times skipped by spring-forward don't run that day,
   and the repeated hour at fall-back runs once.
 

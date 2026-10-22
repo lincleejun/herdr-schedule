@@ -10,6 +10,8 @@
 //   last_result     "ok" | "error" | undefined
 //   last_error      message of the latest failure
 //   last_note       e.g. "missed 3" when a catch-up run collapsed missed slots
+//   last_tab_id     tab created by the latest successful tab-based run
+//   last_pane_id    pane the latest successful run used (prompt target or tab root)
 //   running         true while a run is in flight
 import { minuteFloor, nextRun, parseCron } from "./cron.js";
 

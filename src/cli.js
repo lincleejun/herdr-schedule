@@ -21,6 +21,10 @@ const USAGE = `usage: schedule <command> [args]
   add <id> --cron "<m h dom mon dow>" [--name <label>] [--disabled]
       --prompt "<text>" (--pane <pane_id> | --workspace <label> --agent <name>)
     | --command "<shell command>" --workspace <label> [--cwd <dir>] [--tab-name <name>]
+    | --launch <murong|claude> [--model <model>] [--thinking <level>]
+      (--prompt-file <path> | --prompt "<text>") --workspace <label> [--cwd <dir>] [--tab-name <name>]
+  set <id> [any add option except --disabled]
+                         change fields of an existing task; an empty value ("") removes the field
   list [--json]          show tasks, next run, and last result
   remove <id>            delete a task
   enable <id>            resume a task
@@ -32,7 +36,10 @@ examples:
   schedule add standup --cron "0 9 * * 1-5" --workspace api --agent claude \\
     --prompt "Summarize yesterday's commits"
   schedule add nightly --cron "30 2 * * *" --workspace api --cwd ~/src/api \\
-    --tab-name nightly --command "npm test"`;
+    --tab-name nightly --command "npm test"
+  schedule add brief --cron "0 10 * * 1-5" --workspace api --cwd ~/src/api \\
+    --launch murong --model anthropic/claude-opus-5-5 --thinking medium --prompt-file ~/brief.md
+  schedule set brief --model anthropic/claude-opus-5 --thinking high`;
 
 class UsageError extends Error {}
 
@@ -123,32 +130,52 @@ function requireId(positional, command) {
   return id;
 }
 
-function buildRawTask(id, flags) {
-  const raw = { id };
-  if (flags.name !== undefined) raw.name = flags.name;
-  raw.cron = flags.cron;
+const COMMON_FLAGS = { name: "name", cron: "cron" };
+// CLI option -> tasks.json field, per task kind.
+const KIND_FLAGS = {
+  prompt: { prompt: "text", pane: "pane_id", workspace: "workspace", agent: "agent" },
+  command: { command: "command", workspace: "workspace", cwd: "cwd", "tab-name": "tab_name" },
+  agent: {
+    launch: "agent",
+    model: "model",
+    thinking: "thinking",
+    prompt: "prompt",
+    "prompt-file": "prompt_file",
+    workspace: "workspace",
+    cwd: "cwd",
+    "tab-name": "tab_name",
+  },
+};
+
+function kindFromFlags(flags) {
+  if (flags.launch !== undefined) return "agent";
   if (flags.prompt !== undefined && flags.command !== undefined) {
     throw new UsageError("use either --prompt or --command");
   }
-  if (flags.prompt !== undefined) {
-    raw.kind = "prompt";
-    raw.text = flags.prompt;
-    if (flags.pane !== undefined) raw.pane_id = flags.pane;
-    if (flags.workspace !== undefined) raw.workspace = flags.workspace;
-    if (flags.agent !== undefined) raw.agent = flags.agent;
-  } else if (flags.command !== undefined) {
-    raw.kind = "command";
-    raw.command = flags.command;
-    if (flags.workspace !== undefined) raw.workspace = flags.workspace;
-    if (flags.cwd !== undefined) raw.cwd = flags.cwd;
-    if (flags["tab-name"] !== undefined) raw.tab_name = flags["tab-name"];
-  } else {
-    throw new UsageError("add needs --prompt or --command");
+  if (flags.prompt !== undefined) return "prompt";
+  if (flags.command !== undefined) return "command";
+  throw new UsageError("add needs --prompt, --command or --launch");
+}
+
+/** Copies option values onto `raw`; with `unset`, an empty value deletes the field. */
+function applyFlags(raw, flags, { unset }) {
+  const fields = { ...COMMON_FLAGS, ...KIND_FLAGS[raw.kind] };
+  for (const [flag, value] of Object.entries(flags)) {
+    const key = fields[flag];
+    if (key === undefined) throw new UsageError(`--${flag} does not apply to ${raw.kind} tasks`);
+    if (unset && value === "") delete raw[key];
+    else raw[key] = value;
   }
-  if (flags.disabled) raw.enabled = false;
-  const known = new Set(["name", "cron", "prompt", "command", "pane", "workspace", "agent", "cwd", "tab-name", "disabled"]);
-  const unknown = Object.keys(flags).filter((flag) => !known.has(flag));
-  if (unknown.length > 0) throw new UsageError(`unknown option --${unknown[0]}`);
+  // An agent prompt comes from exactly one place; setting one replaces the other.
+  if (raw.kind === "agent" && flags.prompt !== undefined) delete raw.prompt_file;
+  if (raw.kind === "agent" && flags["prompt-file"] !== undefined) delete raw.prompt;
+}
+
+function buildRawTask(id, flags) {
+  const { disabled, ...fields } = flags;
+  const raw = { id, kind: kindFromFlags(fields) };
+  applyFlags(raw, fields, { unset: false });
+  if (disabled) raw.enabled = false;
   return raw;
 }
 
@@ -228,6 +255,23 @@ async function main(argv) {
       writeTasksRoot(file, root);
       await tellDaemon(dirs.stateDir, { cmd: "reload" });
       console.log(`added ${id}`);
+      return;
+    }
+    case "set": {
+      const id = requireId(positional, "set");
+      if (flags.disabled) throw new UsageError("use schedule disable to pause a task");
+      if (Object.keys(flags).length === 0) throw new UsageError("set needs at least one option");
+      const root = readTasksRoot(file);
+      const index = root.tasks.findIndex((task) => task?.id === id);
+      if (index === -1) throw new Error(`no task "${id}"`);
+      const raw = { ...root.tasks[index] };
+      applyFlags(raw, flags, { unset: true });
+      const result = validateTask(raw, now);
+      if (!result.ok) throw new Error(result.error);
+      root.tasks[index] = raw;
+      writeTasksRoot(file, root);
+      await tellDaemon(dirs.stateDir, { cmd: "reload" });
+      console.log(`updated ${id}`);
       return;
     }
     case "remove": {

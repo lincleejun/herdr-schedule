@@ -7,6 +7,13 @@ const COMMON_KEYS = ["id", "name", "description", "cron", "kind", "enabled"];
 const KIND_KEYS = {
   prompt: ["text", "pane_id", "workspace", "agent"],
   command: ["command", "workspace", "cwd", "tab_name"],
+  agent: ["agent", "model", "thinking", "prompt", "prompt_file", "workspace", "cwd", "tab_name"],
+};
+
+/** Agent CLIs an `agent` task can launch, and their model / thinking flags. */
+export const AGENT_FLAGS = {
+  murong: { model: "--model", thinking: "--thinking" },
+  claude: { model: "--model", thinking: "--effort" },
 };
 
 function optionalString(raw, key) {
@@ -38,7 +45,7 @@ function normalizeTask(raw, referenceTime) {
     throw new Error(`"id" must be 1-64 ASCII letters, digits, ":", ".", "_" or "-"`);
   }
   const kind = raw.kind;
-  if (!Object.hasOwn(KIND_KEYS, kind ?? "")) throw new Error(`"kind" must be "prompt" or "command"`);
+  if (!Object.hasOwn(KIND_KEYS, kind ?? "")) throw new Error(`"kind" must be "prompt", "command" or "agent"`);
   const allowed = new Set([...COMMON_KEYS, ...KIND_KEYS[kind]]);
   const unknown = Object.keys(raw).filter((key) => !allowed.has(key));
   if (unknown.length > 0) throw new Error(`unknown field${unknown.length > 1 ? "s" : ""} for ${kind} task: ${unknown.join(", ")}`);
@@ -80,19 +87,39 @@ function normalizeTask(raw, referenceTime) {
       task.agent = agent;
     }
   } else {
-    task.command = requiredString(raw, "command");
+    if (kind === "command") {
+      task.command = requiredString(raw, "command");
+    } else {
+      task.agent = requiredString(raw, "agent");
+      if (!Object.hasOwn(AGENT_FLAGS, task.agent)) {
+        throw new Error(`"agent" must be one of: ${Object.keys(AGENT_FLAGS).join(", ")}`);
+      }
+      const model = optionalString(raw, "model");
+      if (model !== undefined) task.model = model;
+      const thinking = optionalString(raw, "thinking");
+      if (thinking !== undefined) task.thinking = thinking;
+      const prompt = optionalString(raw, "prompt");
+      const promptFile = optionalString(raw, "prompt_file");
+      if ((prompt === undefined) === (promptFile === undefined)) {
+        throw new Error(`agent task needs exactly one of "prompt" or "prompt_file"`);
+      }
+      if (prompt !== undefined) task.prompt = prompt;
+      else task.prompt_file = homePath(promptFile, "prompt_file");
+    }
     task.workspace = requiredString(raw, "workspace");
     const cwd = optionalString(raw, "cwd");
-    if (cwd !== undefined) {
-      if (!cwd.startsWith("/") && cwd !== "~" && !cwd.startsWith("~/")) {
-        throw new Error(`"cwd" must be an absolute path or start with ~/`);
-      }
-      task.cwd = cwd;
-    }
+    if (cwd !== undefined) task.cwd = homePath(cwd, "cwd");
     const tabName = optionalString(raw, "tab_name");
     if (tabName !== undefined) task.tab_name = tabName;
   }
   return task;
+}
+
+function homePath(value, key) {
+  if (!value.startsWith("/") && value !== "~" && !value.startsWith("~/")) {
+    throw new Error(`"${key}" must be an absolute path or start with ~/`);
+  }
+  return value;
 }
 
 /**

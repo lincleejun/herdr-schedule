@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 
 import { listenControl, sendControl } from "../src/control.js";
-import { executeTask, resolveAgentPane, resolveWorkspace, runHerdr, socketRequest } from "../src/herdr.js";
+import { agentCommand, executeTask, focusTask, resolveAgentPane, resolveWorkspace, runHerdr, socketRequest } from "../src/herdr.js";
 import { clickedItemId, controlSocketPath } from "../src/paths.js";
 
 const dir = mkdtempSync(join(tmpdir(), "hs-"));
@@ -56,7 +56,7 @@ function fakeHerdr(responses) {
 test("prompt task resolves workspace + agent and submits with agent prompt", async () => {
   const herdr = fakeHerdr({ "workspace list": { workspaces }, "agent list": { agents } });
   const task = { kind: "prompt", workspace: "api", agent: "reviewer", text: "--review now" };
-  assert.equal(await executeTask(task, herdr.run), "prompted w1:p2");
+  assert.deepEqual(await executeTask(task, herdr.run), { summary: "prompted w1:p2", pane_id: "w1:p2" });
   assert.deepEqual(herdr.calls.at(-1), ["agent", "prompt", "w1:p2", "--review now"]);
 });
 
@@ -78,7 +78,7 @@ test("command task opens an unfocused tab and runs the command in its root pane"
     "tab create": { type: "tab_created", tab: { tab_id: "w1:t4" }, root_pane: { pane_id: "w1:p7" } },
   });
   const task = { kind: "command", workspace: "api", cwd: "~/src/api", tab_name: "nightly", command: "npm test" };
-  assert.equal(await executeTask(task, herdr.run), "started in w1:p7");
+  assert.deepEqual(await executeTask(task, herdr.run), { summary: "started in w1:p7", tab_id: "w1:t4", pane_id: "w1:p7" });
   assert.deepEqual(herdr.calls.slice(1), [
     ["tab", "create", "--workspace", "w1", "--no-focus", "--cwd", join(homedir(), "src/api"), "--label", "nightly"],
     ["pane", "run", "w1:p7", "npm test"],
@@ -88,6 +88,58 @@ test("command task opens an unfocused tab and runs the command in its root pane"
 test("command task fails cleanly when tab create returns no pane", async () => {
   const herdr = fakeHerdr({ "workspace list": { workspaces }, "tab create": { type: "tab_created" } });
   await assert.rejects(executeTask({ kind: "command", workspace: "api", command: "ls" }, herdr.run), /no root pane/);
+});
+
+test("agent task launches the agent CLI with model, thinking, and a prompt read at run time", async () => {
+  const herdr = fakeHerdr({
+    "workspace list": { workspaces },
+    "tab create": { tab: { tab_id: "w1:t4" }, root_pane: { pane_id: "w1:p7" } },
+  });
+  const task = {
+    kind: "agent",
+    agent: "murong",
+    model: "anthropic/claude-opus-5-5",
+    thinking: "medium",
+    prompt_file: "~/brief's.md",
+    workspace: "api",
+  };
+  await executeTask(task, herdr.run);
+  assert.deepEqual(herdr.calls.at(-1), [
+    "pane",
+    "run",
+    "w1:p7",
+    `murong --model 'anthropic/claude-opus-5-5' --thinking 'medium' "$(cat '${join(homedir(), "brief")}'\\''s.md')"`,
+  ]);
+});
+
+test("agent flags follow the CLI: claude takes thinking as --effort, inline prompts are quoted", () => {
+  assert.equal(
+    agentCommand({ agent: "claude", thinking: "high", prompt: "it's $HOME" }),
+    `claude --effort 'high' 'it'\\''s $HOME'`,
+  );
+});
+
+test("a focused run brings the new tab to the front after the command is typed", async () => {
+  const herdr = fakeHerdr({
+    "workspace list": { workspaces },
+    "tab create": { tab: { tab_id: "w1:t4" }, root_pane: { pane_id: "w1:p7" } },
+  });
+  await executeTask({ kind: "command", workspace: "api", command: "ls" }, herdr.run, { focus: true });
+  assert.deepEqual(herdr.calls.slice(-2), [["pane", "run", "w1:p7", "ls"], ["tab", "focus", "w1:t4"]]);
+});
+
+test("opening a task focuses its last tab, or its workspace once that tab is gone", async () => {
+  const task = { kind: "agent", workspace: "api" };
+  const live = fakeHerdr({});
+  assert.equal(await focusTask(task, { last_tab_id: "w1:t4" }, live.run), "focused w1:t4");
+  assert.deepEqual(live.calls, [["tab", "focus", "w1:t4"]]);
+
+  const closed = fakeHerdr({ "tab focus": new Error("tab_not_found"), "workspace list": { workspaces } });
+  assert.equal(await focusTask(task, { last_tab_id: "w1:t4" }, closed.run), "focused w1");
+  assert.deepEqual(closed.calls.at(-1), ["workspace", "focus", "w1"]);
+
+  const never = fakeHerdr({ "workspace list": { workspaces } });
+  assert.equal(await focusTask(task, {}, never.run), "focused w1");
 });
 
 test("socketRequest speaks newline-delimited JSON and surfaces API errors", async () => {

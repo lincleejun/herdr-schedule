@@ -3,7 +3,7 @@
 import { existsSync, openSync, closeSync, readFileSync, statSync, unlinkSync, watch, writeSync } from "node:fs";
 
 import { listenControl, controlAlive } from "./control.js";
-import { executeTask, socketRequest } from "./herdr.js";
+import { executeTask, focusTask, socketRequest } from "./herdr.js";
 import { isDaemonPid, readPid } from "./launcher.js";
 import { buildModule, buildStoppedModule } from "./module.js";
 import {
@@ -250,11 +250,14 @@ class Daemon {
     this.running.add(task.id);
     log(`${task.id}: running${options.manual ? " (manual)" : ""}${options.missed ? ` after ${options.missed} missed slot(s)` : ""}`);
     this.afterChange();
-    executeTask(task)
+    executeTask(task, undefined, { focus: options.focus === true })
       .then(
-        (summary) => {
+        (result) => {
           finishRun(runtime, undefined);
-          log(`${task.id}: ok, ${summary}`);
+          // Remembered so clicking the task row can jump back to this run.
+          runtime.last_tab_id = result.tab_id;
+          runtime.last_pane_id = result.pane_id;
+          log(`${task.id}: ok, ${result.summary}`);
         },
         (error) => {
           finishRun(runtime, error);
@@ -322,8 +325,18 @@ class Daemon {
         const task = this.findTask(message.task_id);
         if (!task) return { ok: false, error: `unknown or invalid task "${message.task_id}"` };
         if (this.running.has(task.id)) return { ok: false, error: `${task.id} is already running` };
-        this.launch(task, this.state.tasks[task.id], now, { manual: true });
+        this.launch(task, this.state.tasks[task.id], now, { manual: true, focus: message.focus === true });
         return { ok: true };
+      }
+      case "open": {
+        this.reloadTasks(false);
+        const task = this.findTask(message.task_id);
+        if (!task) return { ok: false, error: `unknown or invalid task "${message.task_id}"` };
+        try {
+          return { ok: true, focused: await focusTask(task, this.state.tasks[task.id] ?? {}) };
+        } catch (error) {
+          return { ok: false, error: error.message };
+        }
       }
       case "toggle":
       case "set-enabled": {

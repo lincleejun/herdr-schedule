@@ -1,4 +1,4 @@
-// Entry point for manifest commands: `node src/actions.js <startup|run-now|toggle|restart|stop|open-config>`.
+// Entry point for manifest commands: `node src/actions.js <startup|run-now|toggle|open|restart|stop|open-config>`.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
@@ -13,15 +13,15 @@ async function notify(body) {
   await runHerdr(["notification", "show", TITLE, "--body", body], { timeoutMs: 5000 }).catch(() => undefined);
 }
 
-async function taskCommand(stateDir, cmd) {
+async function taskCommand(stateDir, action, message) {
   const itemId = clickedItemId();
   if (!itemId) {
-    throw new Error(`invoke ${cmd === "run" ? "run-now" : "toggle"} from a task row in the sidebar, or use bin/schedule`);
+    throw new Error(`invoke ${action} from a task row in the sidebar, or use bin/schedule`);
   }
   await ensureDaemon(stateDir);
-  const response = await sendControl(controlSocketPath(stateDir), { cmd, task_id: itemId });
+  const response = await sendControl(controlSocketPath(stateDir), { ...message, task_id: itemId });
   if (!response.ok) throw new Error(response.error);
-  return cmd === "run" ? `started ${itemId}` : `${itemId} ${response.enabled ? "enabled" : "paused"}`;
+  return response;
 }
 
 function openInDefaultApp(file) {
@@ -50,9 +50,15 @@ async function main(action) {
       }
       return `scheduler ${await ensureDaemon(dirs.stateDir)}`;
     case "run-now":
-      return taskCommand(dirs.stateDir, "run");
-    case "toggle":
-      return taskCommand(dirs.stateDir, "toggle");
+      // A click is a request to watch the run, so bring its tab to the front.
+      await taskCommand(dirs.stateDir, action, { cmd: "run", focus: true });
+      return `started ${clickedItemId()}`;
+    case "toggle": {
+      const response = await taskCommand(dirs.stateDir, action, { cmd: "toggle" });
+      return `${clickedItemId()} ${response.enabled ? "enabled" : "paused"}`;
+    }
+    case "open":
+      return (await taskCommand(dirs.stateDir, action, { cmd: "open" })).focused;
     case "restart":
       await stopDaemon(dirs.stateDir);
       await ensureDaemon(dirs.stateDir);
