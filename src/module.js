@@ -85,6 +85,8 @@ function taskItem(task, entry, now) {
     label: truncate(sanitize(task.name) || task.id, MAX_LABEL),
     detail: taskDetail(task, entry, now),
     status: itemStatus(entry),
+    // Clicking the row itself jumps to the task's latest tab (or its workspace).
+    click_action: "open",
     actions: [
       { action_id: "run-now", label: "▶" },
       { action_id: "toggle", label: entry.enabled ? "⏸" : "⏵" },

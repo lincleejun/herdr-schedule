@@ -19,6 +19,11 @@ title = "Schedules: pause/resume task"
 command = ["node", "src/actions.js", "toggle"]
 
 [[actions]]
+id = "open"
+title = "Schedules: open task tab"
+command = ["node", "src/actions.js", "open"]
+
+[[actions]]
 id = "restart"
 title = "Schedules: restart scheduler"
 command = ["node", "src/actions.js", "restart"]

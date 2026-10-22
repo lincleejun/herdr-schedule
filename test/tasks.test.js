@@ -90,6 +90,28 @@ test("rejects invalid tasks with specific messages", () => {
   assert.match(errorOf(command({ agent: "claude" })), /unknown field for command task: agent/);
 });
 
+const agentTask = (overrides = {}) => ({
+  id: "brief",
+  kind: "agent",
+  cron: "0 10 * * 1-5",
+  agent: "murong",
+  model: "anthropic/claude-opus-5-5",
+  thinking: "medium",
+  prompt_file: "~/brief.md",
+  workspace: "api",
+  ...overrides,
+});
+
+test("agent tasks name a supported CLI and exactly one prompt source", () => {
+  assert.equal(validateTask(agentTask()).ok, true);
+  assert.equal(validateTask(agentTask({ model: undefined, thinking: undefined })).ok, true);
+  assert.match(errorOf(agentTask({ agent: "bash" })), /"agent" must be one of: murong, claude/);
+  assert.match(errorOf(agentTask({ prompt: "hi" })), /exactly one of "prompt" or "prompt_file"/);
+  assert.match(errorOf(agentTask({ prompt_file: undefined })), /exactly one of "prompt" or "prompt_file"/);
+  assert.match(errorOf(agentTask({ prompt_file: "brief.md" })), /"prompt_file" must be an absolute path/);
+  assert.match(errorOf(agentTask({ command: "ls" })), /unknown field for agent task: command/);
+});
+
 test("parseTasksFile reports per-task problems and duplicate ids", () => {
   const text = JSON.stringify({
     tasks: [prompt(), command(), prompt({ cron: "bad" }), command({ name: "Again" })],
